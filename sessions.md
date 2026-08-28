@@ -1,5 +1,12 @@
 # Local Agent Studio — Project Memory (sessions.md)
 
+## 2026-08-28 — GitHub integration verification and status-proxy fix
+- Existing GitHub integration verified for the Next.js 14/React 18/TypeScript frontend and FastAPI/Python backend.
+- Confirmed required service credential: `GITHUB_TOKEN` only. The backend reads it server-side; values are never sent to the browser or logged.
+- Fixed `app/api/github/status/route.ts`: the Next.js proxy now uses GET, matching FastAPI `/github/status` (previously it incorrectly forwarded POST and returned 405).
+- Verification: `bun run typecheck` passed; GitHub service tests **6 passed**; FastAPI `/github/status` returned `200 {"ok":true,"configured":false}` without a secret.
+- Integration is ready once `GITHUB_TOKEN` is added in the Keys tab.
+
 ## 2026-08-28 — Clean-upload verification round (post git reset, force-pushed remote)
 - Remote `main` was force-pushed by the user to a clean re-upload (`e954848 "Clean Upload ohne node_modules"`); local had diverged by one redundant commit (only `feedback.txt`, byte-identical to the remote copy). Ran `git reset --hard origin/main` after confirming the local-only content was fully contained on the remote — nothing lost.
 - After the re-upload the working tree was bare: `node_modules` and `.venv` were missing. Rebuilt both:
