@@ -1,5 +1,28 @@
 # Local Agent Studio — Project Memory (sessions.md)
 
+## 2026-08-28 — Clean-upload verification round (post git reset, force-pushed remote)
+- Remote `main` was force-pushed by the user to a clean re-upload (`e954848 "Clean Upload ohne node_modules"`); local had diverged by one redundant commit (only `feedback.txt`, byte-identical to the remote copy). Ran `git reset --hard origin/main` after confirming the local-only content was fully contained on the remote — nothing lost.
+- After the re-upload the working tree was bare: `node_modules` and `.venv` were missing. Rebuilt both:
+  - `bun install` → 170 packages installed clean (lockfile updated).
+  - `bun run setup:python` → fresh `.venv` with requirements.txt (fastapi 0.141, pydantic 2.13, uvicorn 0.52, ddgs 9.16 …).
+- Verification (all real output):
+  - `bun run typecheck` → EXIT 0, clean.
+  - `bun run test:python` → **83 passed** in 3.78s.
+  - backend import smoke `.venv/bin/python -c "from python_backend import main"` → OK.
+  - Bounded smoke runs (started + curled + cleanly terminated, no long-lived processes left):
+    - uvicorn :8009 → `/health` 200 `{"status":"ok","service":"local-agent-studio"}`, `/providers` 200.
+    - `next dev` :8088 → `✓ Ready in 995ms`, `/` → HTTP 200 after compile (1207 modules).
+- **Blocker recorded:** `freebuff-preview` (and `freebuff-deploy`/`freebuff-env`) CLI is NOT present on PATH in this sandbox (checked /usr/local/bin, /usr/bin, `command -v`). Same recurring issue as documented earlier rounds. Because of this, preview-command registration (`freebuff-preview set-install/set/set-build`) and `freebuff-preview start/status` could not be run. The durable scripts in package.json are already correct: `dev` → `scripts/dev.sh` (Next + uvicorn, both 0.0.0.0, respects `${PORT:-3000}`), `build` → `next build`. When the CLI is restored, running `freebuff-preview start` should bring up the app.
+- No source changes made this round; sessions.md entry is the only edit.
+
+## 2026-08-28 — Freebuff Preview-Konfiguration korrigiert und Preview gestartet
+- Ursache des Fehlers: Für das Projekt war kein Dev-Command gespeichert; die UI zeigte deshalb den generischen Vite-Befehl/Port `5173`, obwohl dieses Repo Next.js + FastAPI verwendet.
+- Korrekte Freebuff-Preview-Werte gespeichert: Install `bun install`, Dev `bun run dev`, Port `3000`, Build `bun run build`.
+- `freebuff-preview start` erfolgreich: `running=true`, `listening=true`, `statusCode=200`.
+- Logs verifiziert: Next.js 14.2.30 ready auf `0.0.0.0:3000`, Uvicorn läuft auf `0.0.0.0:8001`, `/` antwortet mit HTTP 200, `/api/providers` antwortet mit HTTP 200.
+- Erwartete Einschränkung: `/api/providers/ollama/models` liefert 502, weil Ollama in der Sandbox nicht läuft; das ist laut Projekt-Dokumentation erwartetes Verhalten und blockiert die Preview nicht.
+- Hinweis: Next.js meldet eine nicht-blockierende Cross-Origin-Warnung zu `allowedDevOrigins` für die Preview-Proxy-Domain.
+
 ## 2026-08-27 (4) — FS Agent Team: jailed filesystem, Docker hardening, todos, loop guard (web-researched)
 ### Research grounding
 - **Antigravity 2.0** (antigravity.google): multi-agent orchestration with root orchestrator + parallel subagents + error recovery/retries → adapted as RootAgent + named subagent todos + self-correction protocol.
