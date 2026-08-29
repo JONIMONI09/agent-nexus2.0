@@ -202,6 +202,12 @@ class FsTools:
                 "(with surrounding lines) or set allow_multiple=true."
             )
         updated = current.replace(old_string, new_string) if allow_multiple else current.replace(old_string, new_string, 1)
+        base_dir = self.jail.root.resolve()
+        target_path = path.resolve()
+        try:
+            target_path.relative_to(base_dir)
+        except ValueError:
+            raise ToolFailure("Invalid file path")
         path.write_text(updated, encoding="utf-8")
         return {"ok": True, "path": self.jail.relative_to_root(path), "replacements": occurrences if allow_multiple else 1}
 
