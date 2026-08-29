@@ -16,7 +16,7 @@
     "framer-motion": "^11.18.2",
     "isomorphic-git": "^1.41.9",
     "neofetch": "^7.1.0",
-    "next": "14.2.30",
+    "next": "15.5.24",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
