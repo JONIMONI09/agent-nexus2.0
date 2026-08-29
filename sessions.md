@@ -1,5 +1,15 @@
 # Local Agent Studio — Project Memory (sessions.md)
 
+## 2026-08-29 — Translation detection and repetition guard fix
+- Root cause of the reported `Hallo wie geht es dir ?` → `Spanish` label: the Spanish heuristic included the ambiguous token ` es `, which is also a normal German word. The French heuristic also treated bare `é` as decisive, which could win before Spanish for words such as `qué`.
+- Fixed both server (`python_backend/translate.py`) and browser (`app/lib/translate-client.ts`) heuristics: removed ambiguous Spanish/Romance function-word markers, added high-signal German greetings/verbs, and removed bare `é` from French detection.
+- Added shared behavior to reject translation model echo, wrapped echo, repeated-token babble, repeated 3-word loops, empty output, and implausibly long output. Invalid translation now reliably falls back to the original user message.
+- Confirmed all internal agent system prompts (`main_agent`, `scout`, `analyst`, `synthesizer`) are English. Translation prompts are English and explicitly require output-only English translation; the context note still instructs the model to answer in the user's detected language.
+- Regression coverage added for German-vs-Spanish detection, Spanish/French separation, echo/babble rejection and sane translations.
+- Verification: `bun run typecheck` passed; full Python suite **91 passed**.
+- Preview configuration corrected and verified through the supported CLI: install `bun install`, dev `bun run dev`, port `3000`, build `bun run build`; `freebuff-preview start` returned `running=true`, `listening=true`, HTTP `200`. Next.js and Uvicorn both bind to `0.0.0.0`. Ollama model discovery returning 502 remains expected when Ollama is not installed/running in the sandbox.
+
+
 ## 2026-08-28 — GitHub integration verification and status-proxy fix
 - Existing GitHub integration verified for the Next.js 14/React 18/TypeScript frontend and FastAPI/Python backend.
 - Confirmed required service credential: `GITHUB_TOKEN` only. The backend reads it server-side; values are never sent to the browser or logged.

@@ -37,12 +37,18 @@ _SCRIPT_TESTS: tuple[tuple[str, str], ...] = (
 )
 
 # Latin-script languages: distinctive letters plus high-signal stop words.
+#
+# Short shared function words are deliberately excluded (" es " is the German word
+# for "it", "una"/"para"/"con"/"que" appear in several Romance languages). They
+# cause false positives like a German "geht es dir" being read as Spanish.
 _LATIN_HINTS: tuple[tuple[str, str], ...] = (
-    ("German", r"\u00e4|\u00f6|\u00fc|\u00df|der |die |das |und |nicht |ist |ich |bitte |danke |schreibe|mache|funktioniert|warum |wie kann "),
-    ("French", r"\u00e9|\u00e8|\u00e7|\u00e0| le | la | les | une | des |est |pour |avec |pas les|je |nous |pourquoi |comment "),
-    ("Spanish", r"\u00f1|\u00bf|\u00a1| el | los | las | una | para | con | que |es |por favor|gracias|por qu\u00e9|c\u00f3mo "),
-    ("Italian", r" il | lo | gli | una | per | con | che | non | sono | perch\u00e9|grazie|come "),
-    ("Portuguese", r"\u00e3|\u00e7| os | as | uma | para | com | que | n\u00e3o |est\u00e1|por favor|obrigado|por que|como "),
+    ("German", r"\u00e4|\u00f6|\u00fc|\u00df|der |die |das |und |nicht |ist |ich |bitte |danke |schreibe|mache|funktioniert|warum |wie |geht |dir |du |guten |tsch\u00fcss|hallo "),
+    # Note: bare \u00e9 is NOT a French marker — it appears in Spanish "qu\u00e9"/"est\u00e1"
+    # and other languages; the remaining French markers are distinctive enough.
+    ("French", r"\u00e8|\u00e7|\u00e0| le | la | les | une | des |est |pour |avec |pas les|je |nous |pourquoi |comment "),
+    ("Spanish", r"\u00f1|\u00bf|\u00a1| el | los | las |por favor|gracias|por qu\u00e9|c\u00f3mo |qu\u00e9 |est\u00e1 | hola |buenos d\u00edas"),
+    ("Italian", r" il | lo | gli | per | con | che | non | sono | perch\u00e9|grazie|come "),
+    ("Portuguese", r"\u00e3|\u00e7| os | as | n\u00e3o |est\u00e1|obrigado|por favor|por que|como "),
     ("Dutch", r" het | een | niet | zijn | met | voor | waarom |hoe kan |alsjeblieft|dank "),
     ("Polish", r" nie | jest | si\u0119| dla | jak | dlaczego|prosz\u0119|dzi\u0119k"),
     ("Turkish", r" bir | i\u00e7in | de\u011fil| nas\u0131l| neden |l\u00fctfen|te\u015fekk\u00fcr"),
@@ -68,6 +74,38 @@ def detect_language(text: str) -> tuple[bool, str]:
             if not ENGLISH_MARKERS.search(text) or re.search(r"[\u00e4\u00f6\u00fc\u00df\u00e9\u00e8\u00e7\u00f1\u00e3\u00bf\u00e0]", text):
                 return True, name
     return False, "English"
+
+
+def is_plausible_translation(original: str, translated: str) -> bool:
+    """Reject empty, over-long, babbling, or echo outputs.
+
+    Tiny local/browser models sometimes emit a loop of repeated words or a plausible-
+    looking sentence that is unrelated to the input. Such output must never replace
+    the user's message, so the run falls back to the original text instead.
+    """
+    t = translated.strip()
+    if not t:
+        return False
+    if len(t) > max(len(original) * 6, 4000):
+        return False
+    words = t.split()
+    if len(words) >= 4:
+        # Same token four times in a row ("yes yes yes yes") — degenerate output.
+        for i in range(len(words) - 3):
+            if len({words[i], words[i + 1], words[i + 2], words[i + 3]}) == 1:
+                return False
+        # Any 3-word sequence repeated — the model is stuck in a loop.
+        seen: set[tuple[str, str, str]] = set()
+        for i in range(len(words) - 2):
+            gram = (words[i], words[i + 1], words[i + 2])
+            if gram in seen:
+                return False
+            seen.add(gram)
+    # The model echoed the input (or wrapped it) instead of translating it.
+    original_lower = original.strip().lower()
+    if t.lower() == original_lower or original_lower in t.lower():
+        return False
+    return True
 
 
 def language_note(language: str, translated: str) -> str:
@@ -120,8 +158,8 @@ async def translate_message(
         translated = (await asyncio.wait_for(_collect_plain(stream), timeout=TRANSLATION_TIMEOUT_SECONDS)).strip()
     except (OllamaError, ProviderRuntimeError, asyncio.TimeoutError, Exception):  # noqa: BLE001 - translation must never break a run
         return text, language, False
-    if not translated or len(translated) > max(len(text) * 6, 4000):
-        # Empty or implausible output (model babbled) — fall back to the original.
+    if not is_plausible_translation(text, translated):
+        # Empty, over-long, repeated or unrelated output — fall back to the original.
         return text, language, False
     return language_note(language, translated), language, True
 
