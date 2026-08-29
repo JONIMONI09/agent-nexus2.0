@@ -919,6 +919,11 @@ async def providers() -> JSONResponse:
 
 @app.post("/providers/detect")
 async def detect_provider(request: ProviderDetectionRequest) -> JSONResponse:
+    if not ALLOW_CUSTOM_PROVIDERS:
+        raise HTTPException(
+            status_code=403,
+            detail="Custom provider management is disabled. Set ALLOW_CUSTOM_PROVIDERS=true to enable (security risk: allows arbitrary code execution and credential access)."
+        )
     try:
         result = await provider_probe.detect(request.base_url, request.auth_env_var)
     except (ValueError, ProviderProbeError) as exc:
@@ -960,6 +965,18 @@ async def upsert_provider(request: ProviderUpsertRequest, x_api_key: str | None 
 
 @app.get("/providers/{provider_id}/models")
 async def provider_models(provider_id: str = Path(min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")) -> JSONResponse:
+    # Security check: prevent model discovery for custom providers when disabled
+    if not ALLOW_CUSTOM_PROVIDERS:
+        profile = provider_store.get(provider_id)
+        if profile and not profile.builtin:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "models": [],
+                    "error": "Custom provider model discovery is disabled. Set ALLOW_CUSTOM_PROVIDERS=true to enable (security risk: allows arbitrary code execution and credential access)."
+                }
+            )
     try:
         discovered = await provider_runtime.list_models(provider_id)
     except ProviderRuntimeError as exc:
@@ -1072,8 +1089,20 @@ def provider_problems(request: OrchestrateRequest) -> list[str]:
         (request.synthesizer_provider_id.strip(), "Synthesizer"),
         (request.fallback_provider_id.strip(), "fallback route"),
     ):
-        if provider_id and not provider_runtime.has_provider(provider_id):
+        if not provider_id:
+            continue
+        if not provider_runtime.has_provider(provider_id):
             problems.append(provider_unconfigured_message(provider_id))
+            continue
+        # Security check: prevent use of custom providers when disabled
+        if not ALLOW_CUSTOM_PROVIDERS:
+            profile = provider_store.get(provider_id)
+            if profile and not profile.builtin:
+                problems.append(
+                    f"{role} provider '{provider_id}' is a custom provider. "
+                    "Custom providers are disabled for security. Set ALLOW_CUSTOM_PROVIDERS=true to enable "
+                    "(security risk: allows arbitrary code execution and credential access)."
+                )
     return problems
 
 
