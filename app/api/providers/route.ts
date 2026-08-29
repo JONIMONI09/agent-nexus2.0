@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const backendUrl = process.env.BACKEND_URL ?? "http://127.0.0.1:8001";
+const apiKey = process.env.API_KEY ?? "";
 
 export async function GET() {
   try {
@@ -21,9 +22,13 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const headers: HeadersInit = { "Content-Type": "application/json" };
+    if (apiKey) {
+      headers["X-API-Key"] = apiKey;
+    }
     const response = await fetch(`${backendUrl}/providers`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: await request.text(),
       cache: "no-store",
     });
