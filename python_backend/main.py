@@ -3,16 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, Header, HTTPException, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .agents import analyst, main_agent, scout, synthesizer
-from .config import APPROVAL_TIMEOUT_SECONDS, FALLBACK_MODEL, GENERATION_STALL_TIMEOUT_SECONDS, MAX_CONTEXT_CHARS, MAX_TOOL_ROUNDS, OLLAMA_BASE_URL, PROVIDER_PROBE_TIMEOUT_SECONDS
+from .config import API_KEY, APPROVAL_TIMEOUT_SECONDS, FALLBACK_MODEL, GENERATION_STALL_TIMEOUT_SECONDS, MAX_CONTEXT_CHARS, MAX_TOOL_ROUNDS, OLLAMA_BASE_URL, PROVIDER_PROBE_TIMEOUT_SECONDS
 from .context import pack_history
 from .fs_agent.jail import PathJail
 from .fs_agent.team import FsAgentTeam
@@ -20,7 +21,7 @@ from .learning import MemoryStore, extract_lessons, prompt_block, record_lessons
 from .ollama_client import OllamaClient, OllamaError
 from .provider_models import ProviderProfile, generated_provider_id, host_from_url, normalize_base_url
 from .provider_presets import provider_presets
-from .provider_probe import ProviderProbe
+from .provider_probe import ProviderProbe, ProviderProbeError
 from .provider_runtime import ProviderRuntime, ProviderRuntimeError, is_browser_only_provider, provider_unconfigured_message
 from .provider_store import ProviderStore
 from .skills.discuss import DebateSkill
@@ -28,7 +29,7 @@ from .skills.web_search import WebSearchSkill
 from .tools import ConsentBroker, ToolRegistry
 from .translate import translation_routes, translate_message_best_effort
 from .github_service import GitHubService, GitHubServiceError
-from .types import ApprovalRequest, FsRunRequest, FsSettingsRequest, GitHubBranchRequest, GitHubPullRequestRequest, GitHubRepositoryRequest, HistoryMessage, LearningSettingsRequest, LearningUpdateRequest, OrchestrateRequest, ProviderDetectionRequest, ProviderModelsRequest, ProviderUpsertRequest
+from .types import ApprovalRequest, FsApprovalRequest, FsRunRequest, FsSettingsRequest, GitHubBranchRequest, GitHubPullRequestRequest, GitHubRepositoryRequest, HistoryMessage, LearningSettingsRequest, LearningUpdateRequest, OrchestrateRequest, ProviderDetectionRequest, ProviderModelsRequest, ProviderUpsertRequest
 
 app = FastAPI(title="Local Agent Studio API", version="1.0.0")
 app.add_middleware(
@@ -60,6 +61,34 @@ seed_builtin_providers()
 consent_broker = ConsentBroker()
 memory_store = MemoryStore()
 learning_enabled = {"on": False}
+
+
+def require_api_key(x_api_key: str | None) -> None:
+    """
+    Verify API key for administrative operations when API_KEY is configured.
+    
+    Raises HTTPException(401) if:
+    - API_KEY is set and x_api_key is missing
+    - API_KEY is set and x_api_key does not match (constant-time comparison)
+    
+    Does nothing if API_KEY is not configured (local development mode).
+    """
+    if not API_KEY:
+        # No API key configured - allow operation (local development mode)
+        return
+    if not x_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Administrative operations require X-API-Key header when API_KEY is configured.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    # Use constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
 
 
 async def _debate_chat_async(system: str, user: str, history: list[dict[str, str]]) -> str:
@@ -792,22 +821,24 @@ async def fs_settings_post(request: FsSettingsRequest) -> dict[str, Any]:
 async def fs_run(request: FsRunRequest) -> StreamingResponse:
     """Run the FS agent team; every real tool call pauses for browser consent."""
     run_id = str(uuid.uuid4())
+    approval_token = str(uuid.uuid4())  # Secret token for authorization
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
     async def emit(event_type: str, **payload: Any) -> None:
         await queue.put(event_payload(event_type, **payload))
 
     async def needs_consent(tool: str, arguments: dict[str, Any]) -> bool:
-        fs_pending[run_id] = {"tool": tool, "arguments": arguments, "event": asyncio.Event(), "approved": None}
+        # Store pending operation keyed by approval_token (secret), not run_id (public)
+        fs_pending[approval_token] = {"run_id": run_id, "tool": tool, "arguments": arguments, "event": asyncio.Event(), "approved": None}
         await emit("fs_consent_required", run_id=run_id, tool=tool, arguments=arguments)
-        pending = fs_pending[run_id]
+        pending = fs_pending[approval_token]
         try:
             await asyncio.wait_for(pending["event"].wait(), timeout=APPROVAL_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             pending["approved"] = False
         decision = bool(pending["approved"])
         await emit("fs_consent_result", run_id=run_id, tool=tool, approved=decision)
-        fs_pending.pop(run_id, None)
+        fs_pending.pop(approval_token, None)
         return decision
 
     async def worker() -> None:
@@ -818,7 +849,8 @@ async def fs_run(request: FsRunRequest) -> StreamingResponse:
         except Exception as exc:  # noqa: BLE001 - surfaced to the browser
             await emit("fs_error", message=str(exc), run_id=run_id)
         finally:
-            fs_pending.pop(run_id, None)
+            # Clean up any pending operations for this approval_token
+            fs_pending.pop(approval_token, None)
             await queue.put(None)
 
     task = asyncio.create_task(worker())
@@ -833,21 +865,48 @@ async def fs_run(request: FsRunRequest) -> StreamingResponse:
         finally:
             if not task.done():
                 task.cancel()
-            fs_pending.pop(run_id, None)
+            fs_pending.pop(approval_token, None)
 
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache, no-transform", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Approval-Token": approval_token,  # Return secret token for authorization
+        },
     )
 
 
 @app.post("/fs/approve")
-async def fs_approve(request: ApprovalRequest) -> dict[str, Any]:
-    """Resolve a pending fs_consent_required for the run that owns call_id=run token."""
-    pending = fs_pending.get(request.call_id)
+async def fs_approve(request: FsApprovalRequest) -> dict[str, Any]:
+    """Resolve a pending fs_consent_required; requires both run_id and secret approval_token."""
+    # Find pending operation by approval_token (not run_id) to prevent unauthorized approval
+    pending = None
+    approval_token_key = None
+    
+    # Search for the pending operation that matches both run_id and approval_token
+    for token, pending_data in fs_pending.items():
+        if pending_data.get("run_id") == request.run_id:
+            # Found a pending operation with matching run_id, now verify the approval_token
+            if token == request.approval_token:
+                pending = pending_data
+                approval_token_key = token
+                break
+            else:
+                # run_id matches but approval_token doesn't - unauthorized attempt
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid approval token for this run. Authorization required."
+                )
+    
     if pending is None:
-        raise HTTPException(status_code=404, detail="No pending FS tool request for this run.")
+        raise HTTPException(
+            status_code=404,
+            detail="No pending FS tool request for this run, or the request has expired."
+        )
+    
     pending["approved"] = request.approved
     pending["event"].set()
     return {"ok": True}
@@ -860,15 +919,21 @@ async def providers() -> JSONResponse:
 
 @app.post("/providers/detect")
 async def detect_provider(request: ProviderDetectionRequest) -> JSONResponse:
+    if not ALLOW_CUSTOM_PROVIDERS:
+        raise HTTPException(
+            status_code=403,
+            detail="Custom provider management is disabled. Set ALLOW_CUSTOM_PROVIDERS=true to enable (security risk: allows arbitrary code execution and credential access)."
+        )
     try:
         result = await provider_probe.detect(request.base_url, request.auth_env_var)
-    except ValueError as exc:
+    except (ValueError, ProviderProbeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return JSONResponse(content={"ok": True, "result": result.model_dump()})
 
 
 @app.post("/providers")
-async def upsert_provider(request: ProviderUpsertRequest) -> JSONResponse:
+async def upsert_provider(request: ProviderUpsertRequest, x_api_key: str | None = Header(default=None)) -> JSONResponse:
+    require_api_key(x_api_key)
     provider_id = (request.id or generated_provider_id(request.name)).strip().lower()
     if provider_id in {profile.id for profile in provider_store.list() if profile.builtin}:
         raise HTTPException(status_code=409, detail="Built-in provider profiles cannot be overwritten.")
@@ -900,6 +965,18 @@ async def upsert_provider(request: ProviderUpsertRequest) -> JSONResponse:
 
 @app.get("/providers/{provider_id}/models")
 async def provider_models(provider_id: str = Path(min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")) -> JSONResponse:
+    # Security check: prevent model discovery for custom providers when disabled
+    if not ALLOW_CUSTOM_PROVIDERS:
+        profile = provider_store.get(provider_id)
+        if profile and not profile.builtin:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "models": [],
+                    "error": "Custom provider model discovery is disabled. Set ALLOW_CUSTOM_PROVIDERS=true to enable (security risk: allows arbitrary code execution and credential access)."
+                }
+            )
     try:
         discovered = await provider_runtime.list_models(provider_id)
     except ProviderRuntimeError as exc:
@@ -913,7 +990,8 @@ async def provider_models(provider_id: str = Path(min_length=2, max_length=64, p
 
 
 @app.delete("/providers/{provider_id}")
-async def delete_provider(provider_id: str = Path(min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")) -> JSONResponse:
+async def delete_provider(provider_id: str = Path(min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$"), x_api_key: str | None = Header(default=None)) -> JSONResponse:
+    require_api_key(x_api_key)
     if provider_store.get(provider_id) is None:
         raise HTTPException(status_code=404, detail="Provider profile was not found.")
     if not provider_store.delete(provider_id):
@@ -1011,8 +1089,20 @@ def provider_problems(request: OrchestrateRequest) -> list[str]:
         (request.synthesizer_provider_id.strip(), "Synthesizer"),
         (request.fallback_provider_id.strip(), "fallback route"),
     ):
-        if provider_id and not provider_runtime.has_provider(provider_id):
+        if not provider_id:
+            continue
+        if not provider_runtime.has_provider(provider_id):
             problems.append(provider_unconfigured_message(provider_id))
+            continue
+        # Security check: prevent use of custom providers when disabled
+        if not ALLOW_CUSTOM_PROVIDERS:
+            profile = provider_store.get(provider_id)
+            if profile and not profile.builtin:
+                problems.append(
+                    f"{role} provider '{provider_id}' is a custom provider. "
+                    "Custom providers are disabled for security. Set ALLOW_CUSTOM_PROVIDERS=true to enable "
+                    "(security risk: allows arbitrary code execution and credential access)."
+                )
     return problems
 
 

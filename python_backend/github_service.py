@@ -16,19 +16,40 @@ class GitHubServiceError(RuntimeError):
 
 
 class GitHubService:
-    def __init__(self, token: str | None = None, *, timeout: float = 15.0) -> None:
+    def __init__(self, token: str | None = None, *, timeout: float = 15.0, allowed_repositories: list[str] | None = None) -> None:
         self.token = token if token is not None else os.getenv("GITHUB_TOKEN", "").strip()
         self.timeout = timeout
+        # Parse allowed repositories from environment or parameter
+        if allowed_repositories is not None:
+            self.allowed_repositories = allowed_repositories
+        else:
+            env_repos = os.getenv("GITHUB_ALLOWED_REPOSITORIES", "").strip()
+            if env_repos:
+                # Parse comma-separated list, normalize whitespace
+                self.allowed_repositories = [repo.strip() for repo in env_repos.split(",") if repo.strip()]
+            else:
+                self.allowed_repositories = []
 
     def _require_token(self) -> None:
         if not self.token:
             raise GitHubServiceError("GitHub is not configured. Add GITHUB_TOKEN in the Keys tab.")
 
-    @staticmethod
-    def _validate_repository(repository: str) -> str:
+    def _validate_repository(self, repository: str) -> str:
         value = repository.strip()
         if not _REPOSITORY.fullmatch(value):
             raise GitHubServiceError("repository must use the owner/repository format.")
+        
+        # Enforce repository allowlist authorization
+        if not self.allowed_repositories:
+            raise GitHubServiceError("GitHub integration is disabled. Configure GITHUB_ALLOWED_REPOSITORIES to authorize specific repositories.")
+        
+        # Case-insensitive comparison for repository names (GitHub treats them as case-insensitive)
+        normalized_value = value.lower()
+        normalized_allowed = [repo.lower() for repo in self.allowed_repositories]
+        
+        if normalized_value not in normalized_allowed:
+            raise GitHubServiceError(f"Repository '{value}' is not authorized. Contact the administrator to add it to the allowlist.")
+        
         return value
 
     @staticmethod
