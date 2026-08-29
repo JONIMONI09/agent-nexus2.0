@@ -25,3 +25,6 @@ PROVIDER_PROBE_TIMEOUT_SECONDS = env_float("PROVIDER_PROBE_TIMEOUT_SECONDS", 5.0
 # If a provider streams nothing for this long, the turn is considered stalled and the
 # fallback engine retries with the fallback model (collect_with_fallback handles it).
 GENERATION_STALL_TIMEOUT_SECONDS = env_float("GENERATION_STALL_TIMEOUT_SECONDS", 45.0)
+# API key for administrative operations (provider management). When set, POST/DELETE
+# /providers endpoints require X-API-Key header. Recommended for network-exposed deployments.
+API_KEY = os.getenv("API_KEY", "")

@@ -3,16 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, Header, HTTPException, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .agents import analyst, main_agent, scout, synthesizer
-from .config import APPROVAL_TIMEOUT_SECONDS, FALLBACK_MODEL, GENERATION_STALL_TIMEOUT_SECONDS, MAX_CONTEXT_CHARS, MAX_TOOL_ROUNDS, OLLAMA_BASE_URL, PROVIDER_PROBE_TIMEOUT_SECONDS
+from .config import API_KEY, APPROVAL_TIMEOUT_SECONDS, FALLBACK_MODEL, GENERATION_STALL_TIMEOUT_SECONDS, MAX_CONTEXT_CHARS, MAX_TOOL_ROUNDS, OLLAMA_BASE_URL, PROVIDER_PROBE_TIMEOUT_SECONDS
 from .context import pack_history
 from .fs_agent.jail import PathJail
 from .fs_agent.team import FsAgentTeam
@@ -60,6 +61,34 @@ seed_builtin_providers()
 consent_broker = ConsentBroker()
 memory_store = MemoryStore()
 learning_enabled = {"on": False}
+
+
+def require_api_key(x_api_key: str | None) -> None:
+    """
+    Verify API key for administrative operations when API_KEY is configured.
+    
+    Raises HTTPException(401) if:
+    - API_KEY is set and x_api_key is missing
+    - API_KEY is set and x_api_key does not match (constant-time comparison)
+    
+    Does nothing if API_KEY is not configured (local development mode).
+    """
+    if not API_KEY:
+        # No API key configured - allow operation (local development mode)
+        return
+    if not x_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Administrative operations require X-API-Key header when API_KEY is configured.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    # Use constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
 
 
 async def _debate_chat_async(system: str, user: str, history: list[dict[str, str]]) -> str:
@@ -868,7 +897,8 @@ async def detect_provider(request: ProviderDetectionRequest) -> JSONResponse:
 
 
 @app.post("/providers")
-async def upsert_provider(request: ProviderUpsertRequest) -> JSONResponse:
+async def upsert_provider(request: ProviderUpsertRequest, x_api_key: str | None = Header(default=None)) -> JSONResponse:
+    require_api_key(x_api_key)
     provider_id = (request.id or generated_provider_id(request.name)).strip().lower()
     if provider_id in {profile.id for profile in provider_store.list() if profile.builtin}:
         raise HTTPException(status_code=409, detail="Built-in provider profiles cannot be overwritten.")
@@ -913,7 +943,8 @@ async def provider_models(provider_id: str = Path(min_length=2, max_length=64, p
 
 
 @app.delete("/providers/{provider_id}")
-async def delete_provider(provider_id: str = Path(min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")) -> JSONResponse:
+async def delete_provider(provider_id: str = Path(min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$"), x_api_key: str | None = Header(default=None)) -> JSONResponse:
+    require_api_key(x_api_key)
     if provider_store.get(provider_id) is None:
         raise HTTPException(status_code=404, detail="Provider profile was not found.")
     if not provider_store.delete(provider_id):

@@ -8,12 +8,18 @@ type RouteContext = {
 };
 
 const backendUrl = process.env.BACKEND_URL ?? "http://127.0.0.1:8001";
+const apiKey = process.env.API_KEY ?? "";
 
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
     const providerId = encodeURIComponent(context.params.providerId);
+    const headers: HeadersInit = {};
+    if (apiKey) {
+      headers["X-API-Key"] = apiKey;
+    }
     const response = await fetch(`${backendUrl}/providers/${providerId}`, {
       method: "DELETE",
+      headers,
       cache: "no-store",
     });
     const payload = await response.json();

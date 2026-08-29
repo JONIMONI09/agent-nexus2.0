@@ -133,10 +133,23 @@ All variables are optional; sensible defaults are used.
 | `MAX_TOOL_ROUNDS`            | `3`                        | Max tool-call rounds per agent (loop guard) |
 | `FALLBACK_MODEL`             | `qwen2.5:3b`               | Default fallback model id                   |
 | `PROVIDER_PROBE_TIMEOUT_SECONDS` | `5`                    | Timeout for provider capability probes      |
+| `API_KEY`                    | _(empty)_                  | API key for provider management (see Security) |
 
 **Provider API keys** (optional, e.g. for an external OpenAI-compatible endpoint): set them in the
 host environment and reference the variable **name** in the provider form. The backend resolves the
 value at request time; it never ships the value to the browser and never logs it.
+
+### Security: API Key Authentication
+
+When deploying in network-accessible environments, set `API_KEY` to protect provider management endpoints:
+
+```bash
+# Generate a strong API key
+export API_KEY=$(openssl rand -base64 32)
+```
+
+When `API_KEY` is set, `POST /providers` and `DELETE /providers/{id}` require the `X-API-Key` header.
+The Next.js proxy automatically forwards the key from its environment. See [SECURITY.md](SECURITY.md) for details.
 
 ---
 
