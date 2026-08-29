@@ -116,18 +116,43 @@ class FsTools:
         docs.mkdir(parents=True)
         date = __import__("datetime").date.today().isoformat()
 
-        (project / "README.md").write_text(
+        base_dir = self.jail.root.resolve()
+        
+        readme_path = (project / "README.md").resolve()
+        try:
+            readme_path.relative_to(base_dir)
+        except ValueError:
+            raise ToolFailure("Invalid file path")
+        readme_path.write_text(
             README_TEMPLATE.format(name=name, description=description, date=date), encoding="utf-8"
         )
-        (project / "AGENTS.md").write_text(
+        
+        agents_md_path = (project / "AGENTS.md").resolve()
+        try:
+            agents_md_path.relative_to(base_dir)
+        except ValueError:
+            raise ToolFailure("Invalid file path")
+        agents_md_path.write_text(
             AGENTS_MD_TEMPLATE.format(folder=name, purpose="Project root - own the overall structure and finish state."),
             encoding="utf-8",
         )
-        (docs / "original_request.md").write_text(
+        
+        original_request_path = (docs / "original_request.md").resolve()
+        try:
+            original_request_path.relative_to(base_dir)
+        except ValueError:
+            raise ToolFailure("Invalid file path")
+        original_request_path.write_text(
             f"# Original user request (verbatim, every agent must honor this)\n\n{original_request}\n",
             encoding="utf-8",
         )
-        (docs / "decisions.md").write_text(
+        
+        decisions_path = (docs / "decisions.md").resolve()
+        try:
+            decisions_path.relative_to(base_dir)
+        except ValueError:
+            raise ToolFailure("Invalid file path")
+        decisions_path.write_text(
             "# Decision log\n\nEvery agent appends its structural decisions here (one bullet per decision, newest first).\n",
             encoding="utf-8",
         )
@@ -152,7 +177,13 @@ class FsTools:
         if folder.parent == self.jail.root:
             raise ToolFailure("Create folders inside a project, not directly at the jail root.")
         folder.mkdir(parents=True)
-        (folder / "AGENTS.md").write_text(
+        agents_md_path = (folder / "AGENTS.md").resolve()
+        base_dir = self.jail.root.resolve()
+        try:
+            agents_md_path.relative_to(base_dir)
+        except ValueError:
+            raise ToolFailure("Invalid file path")
+        agents_md_path.write_text(
             AGENTS_MD_TEMPLATE.format(folder=folder.name, purpose=purpose), encoding="utf-8"
         )
         return {"ok": True, "folder": self.jail.relative_to_root(folder), "agents_md": True}
