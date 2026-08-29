@@ -44,9 +44,43 @@ async function openPullRequest(token: string) {
 }
 
 export async function POST(request: NextRequest) {
+  // Authentication: verify caller authorization before any privileged operations
+  const authHeader = request.headers.get("authorization");
+  const apiSecret = process.env.GITHUB_SYNC_SECRET?.trim() ?? "";
+  
+  // Require both the secret to be configured AND the caller to provide it
+  if (!apiSecret) {
+    return Response.json(
+      { ok: false, error: "GITHUB_SYNC_SECRET is not configured on the server. This endpoint requires authentication." },
+      { status: 500 },
+    );
+  }
+  
+  // Validate the caller's authorization header
+  if (!authHeader || authHeader !== `Bearer ${apiSecret}`) {
+    return Response.json(
+      { ok: false, error: "Unauthorized. Valid authorization required." },
+      { status: 401 },
+    );
+  }
+
   const token = process.env.GITHUB_TOKEN?.trim() ?? "";
+  
+  // Parse and validate action parameter - only allow specific known actions
   const body = await request.json().catch(() => ({}));
-  const action = typeof body.action === "string" ? body.action : "all";
+  const rawAction = typeof body.action === "string" ? body.action.toLowerCase().trim() : "";
+  
+  // Explicit allowlist: only accept exact matches for known safe actions
+  const allowedActions = new Set(["check", "push", "all"]);
+  const action = allowedActions.has(rawAction) ? rawAction : "";
+  
+  // Reject unknown or empty actions
+  if (!action) {
+    return Response.json(
+      { ok: false, error: "Invalid action. Must be one of: check, push, all" },
+      { status: 400 },
+    );
+  }
 
   if (!token) {
     return Response.json(

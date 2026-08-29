@@ -138,6 +138,11 @@ All variables are optional; sensible defaults are used.
 host environment and reference the variable **name** in the provider form. The backend resolves the
 value at request time; it never ships the value to the browser and never logs it.
 
+**GitHub integration** (optional): The `/api/github/sync` endpoint requires authentication. See
+[SECURITY.md](SECURITY.md) for configuration details. Required environment variables:
+- `GITHUB_SYNC_SECRET` — Authentication secret for the sync endpoint
+- `GITHUB_TOKEN` — GitHub personal access token for repository operations
+
 ---
 
 ## Modes
