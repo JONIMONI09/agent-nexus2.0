@@ -21,7 +21,7 @@ from .learning import MemoryStore, extract_lessons, prompt_block, record_lessons
 from .ollama_client import OllamaClient, OllamaError
 from .provider_models import ProviderProfile, generated_provider_id, host_from_url, normalize_base_url
 from .provider_presets import provider_presets
-from .provider_probe import ProviderProbe
+from .provider_probe import ProviderProbe, ProviderProbeError
 from .provider_runtime import ProviderRuntime, ProviderRuntimeError, is_browser_only_provider, provider_unconfigured_message
 from .provider_store import ProviderStore
 from .skills.discuss import DebateSkill
@@ -891,7 +891,7 @@ async def providers() -> JSONResponse:
 async def detect_provider(request: ProviderDetectionRequest) -> JSONResponse:
     try:
         result = await provider_probe.detect(request.base_url, request.auth_env_var)
-    except ValueError as exc:
+    except (ValueError, ProviderProbeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return JSONResponse(content={"ok": True, "result": result.model_dump()})
 
