@@ -4,12 +4,14 @@ from typing import Any
 
 import httpx
 
+from .config import ALLOWED_CREDENTIAL_ENV_VARS
 from .provider_models import (
     ProviderDetectionResult,
     ProviderProfile,
     host_from_url,
     join_endpoint,
     normalize_base_url,
+    validate_credential_transport_security,
 )
 
 
@@ -25,12 +27,23 @@ class ProviderProbe:
     def _headers(self, auth_env_var: str) -> dict[str, str]:
         import os
 
+        # Security: Validate that the environment variable is in the approved allowlist
+        # to prevent credential exfiltration attacks.
+        if auth_env_var and auth_env_var not in ALLOWED_CREDENTIAL_ENV_VARS:
+            raise ProviderProbeError(
+                f"Environment variable '{auth_env_var}' is not in the approved credential allowlist. "
+                f"Permitted variables: {', '.join(sorted(ALLOWED_CREDENTIAL_ENV_VARS))}"
+            )
+        
         token = os.getenv(auth_env_var, "") if auth_env_var else ""
         if not token:
             return {}
         return {"Authorization": f"Bearer {token}"}
 
     async def detect(self, base_url: str, auth_env_var: str = "") -> ProviderDetectionResult:
+        # Security: Enforce HTTPS when credentials are being transmitted
+        validate_credential_transport_security(base_url, auth_env_var)
+        
         normalized = normalize_base_url(base_url)
         checked: list[str] = []
         timeout = httpx.Timeout(self.timeout_seconds, connect=2.0)

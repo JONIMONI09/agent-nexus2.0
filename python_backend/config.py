@@ -25,3 +25,31 @@ PROVIDER_PROBE_TIMEOUT_SECONDS = env_float("PROVIDER_PROBE_TIMEOUT_SECONDS", 5.0
 # If a provider streams nothing for this long, the turn is considered stalled and the
 # fallback engine retries with the fallback model (collect_with_fallback handles it).
 GENERATION_STALL_TIMEOUT_SECONDS = env_float("GENERATION_STALL_TIMEOUT_SECONDS", 45.0)
+
+# Security: Allowlist of environment variables that may be used for provider credentials.
+# This prevents credential exfiltration attacks where an attacker could probe arbitrary
+# environment variables and send their values to attacker-controlled endpoints.
+# Only explicitly approved credential variable names are permitted.
+ALLOWED_CREDENTIAL_ENV_VARS = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GROQ_API_KEY",
+        "FIREWORKS_API_KEY",
+        "TOGETHER_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY",
+        "COHERE_API_KEY",
+        "REPLICATE_API_TOKEN",
+        "HUGGINGFACE_API_KEY",
+        "LITELLM_MASTER_KEY",
+        "OPENROUTER_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "AI21_API_KEY",
+        "ANYSCALE_API_KEY",
+        "BASETEN_API_KEY",
+        "CLOUDFLARE_API_KEY",
+        "VOYAGE_API_KEY",
+        "WRITER_API_KEY",
+    }
+)
