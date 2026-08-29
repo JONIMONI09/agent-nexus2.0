@@ -25,3 +25,6 @@ PROVIDER_PROBE_TIMEOUT_SECONDS = env_float("PROVIDER_PROBE_TIMEOUT_SECONDS", 5.0
 # If a provider streams nothing for this long, the turn is considered stalled and the
 # fallback engine retries with the fallback model (collect_with_fallback handles it).
 GENERATION_STALL_TIMEOUT_SECONDS = env_float("GENERATION_STALL_TIMEOUT_SECONDS", 45.0)
+# GitHub repository allowlist: comma-separated list of owner/repo pairs authorized for GitHub operations.
+# Example: "myorg/repo1,myorg/repo2". If empty or unset, all GitHub operations are rejected.
+GITHUB_ALLOWED_REPOSITORIES = os.getenv("GITHUB_ALLOWED_REPOSITORIES", "")
