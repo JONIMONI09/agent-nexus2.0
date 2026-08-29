@@ -22,12 +22,17 @@ const SCRIPT_TESTS: Array<[string, RegExp]> = [
   ["Thai", /[\u0E00-\u0E7F]/],
 ];
 
+// Short shared function words are deliberately excluded (" es " is the German word
+// for "it", "una"/"para"/"con"/"que" appear in several Romance languages). They
+// cause false positives like a German "geht es dir" being read as Spanish.
 const LATIN_HINTS: Array<[string, RegExp]> = [
-  ["German", / ä| ö| ü|ß| der | die | das | und | nicht | ist | ich | bitte | danke |schreibe|mache|funktioniert|warum |wie kann /],
-  ["French", / é| è|ç|à| le | la | les | une | des |est |pour |avec |je |nous |pourquoi |comment /],
-  ["Spanish", / ñ|¿|¡| el | los | las | una | para | con | que |es |por favor|gracias|por qué|cómo /],
-  ["Italian", / il | lo | gli | una | per | con | che | non | sono |perché|grazie|come /],
-  ["Portuguese", / ã|ç| os | as | uma | para | com | não |está|obrigado|por que|como /],
+  ["German", / ä| ö| ü|ß| der | die | das | und | nicht | ist | ich | bitte | danke |schreibe|mache|funktioniert|warum |wie |geht |dir |du |guten |tschüss|hallo /],
+  // Note: bare é is NOT a French marker — it appears in Spanish "qué"/"está" and
+  // other languages; the remaining French markers are distinctive enough.
+  ["French", / è|ç|à| le | la | les | une | des |est |pour |avec |je |nous |pourquoi |comment /],
+  ["Spanish", / ñ|¿|¡| el | los | las |por favor|gracias|por qué|cómo |qué |está | hola |buenos días/],
+  ["Italian", / il | lo | gli | per | con | che | non | sono |perché|grazie|come /],
+  ["Portuguese", / ã|ç| os | as | não |está|obrigado|por favor|por que|como /],
   ["Dutch", / het | een | niet | zijn | met | voor | waarom |hoe kan |dank /],
   ["Polish", / nie | jest | się| dla | jak |dlaczego|proszę|dzięk/],
   ["Turkish", / bir | için | değil| nasıl| neden |lütfen/],
@@ -53,6 +58,29 @@ export function languageNoteSuffix(language: string): string {
   return `\n\n[Context note: the user wrote the original message in ${language}. Reply in ${language}. The text above is its English translation for your processing.]`;
 }
 
+function isPlausibleTranslation(original: string, translated: string): boolean {
+  const t = translated.trim();
+  if (!t) return false;
+  if (t.length > Math.max(original.length * 6, 4000)) return false;
+  const words = t.split(/\s+/);
+  for (let i = 0; i <= words.length - 4; i += 1) {
+    // Same token four times in a row ("yes yes yes yes") — degenerate output.
+    if (words[i] === words[i + 1] && words[i + 1] === words[i + 2] && words[i + 2] === words[i + 3]) return false;
+  }
+  const seen = new Set<string>();
+  for (let i = 0; i <= words.length - 3; i += 1) {
+    // Any 3-word sequence repeated — the model is stuck in a loop.
+    const gram = words.slice(i, i + 3).join(" ");
+    if (seen.has(gram)) return false;
+    seen.add(gram);
+  }
+  // The model echoed the input (or wrapped it) instead of translating it.
+  const originalLower = original.trim().toLowerCase();
+  const lower = t.toLowerCase();
+  if (lower === originalLower || lower.includes(originalLower)) return false;
+  return true;
+}
+
 export async function translateWithEngine(engine: MLCEngine, text: string): Promise<string | null> {
   try {
     const completion = await engine.chat.completions.create({
@@ -65,8 +93,7 @@ export async function translateWithEngine(engine: MLCEngine, text: string): Prom
       max_tokens: 500,
     });
     const translated = (completion.choices[0]?.message?.content ?? "").trim();
-    if (!translated || translated.length > Math.max(text.length * 6, 4000)) return null;
-    // Reject non-translation babble: a translation must not be wildly longer or empty.
+    if (!isPlausibleTranslation(text, translated)) return null;
     return translated;
   } catch {
     return null;
