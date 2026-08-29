@@ -25,3 +25,10 @@ PROVIDER_PROBE_TIMEOUT_SECONDS = env_float("PROVIDER_PROBE_TIMEOUT_SECONDS", 5.0
 # If a provider streams nothing for this long, the turn is considered stalled and the
 # fallback engine retries with the fallback model (collect_with_fallback handles it).
 GENERATION_STALL_TIMEOUT_SECONDS = env_float("GENERATION_STALL_TIMEOUT_SECONDS", 45.0)
+# SECURITY: Custom providers can execute arbitrary code and access environment variables.
+# Only enable this in trusted, isolated environments. Default is False for security.
+ALLOW_CUSTOM_PROVIDERS = os.getenv("ALLOW_CUSTOM_PROVIDERS", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
