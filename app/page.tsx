@@ -107,7 +107,8 @@ export default function HomePage() {
   const [fsTodos, setFsTodos] = useState<FsTodo[]>([]);
   const [fsPendingTool, setFsPendingTool] = useState<{ runId: string; tool: string; arguments: Record<string, unknown> } | null>(null);
   const [fsSummary, setFsSummary] = useState("");
-  const fsPendingRef = useRef<{ runId: string; tool: string; arguments: Record<string, unknown> } | null>(null);
+  const fsPendingRef = useRef<{ runId: string; approvalToken: string; tool: string; arguments: Record<string, unknown> } | null>(null);
+  const fsApprovalTokenRef = useRef<string | null>(null);
   const fsAbortRef = useRef<AbortController | null>(null);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
   const streamingIdsRef = useRef<{ scout: string | null; synthesizer: string | null; analyst: string | null; main: string | null }>({ scout: null, synthesizer: null, analyst: null, main: null });
@@ -419,12 +420,13 @@ export default function HomePage() {
 
   const handleFsDecision = useCallback(async (approved: boolean) => {
     const pending = fsPendingRef.current;
-    if (!pending) return;
+    const approvalToken = fsApprovalTokenRef.current;
+    if (!pending || !approvalToken) return;
     try {
       const response = await fetch("/api/fs/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ call_id: pending.runId, approved }),
+        body: JSON.stringify({ run_id: pending.runId, approval_token: approvalToken, approved }),
       });
       if (!response.ok) throw new Error("The decision could not be delivered.");
       pushFsFeed("consent", approved ? `Allowed: ${pending.tool}` : `Denied: ${pending.tool}`, approved ? "The tool runs inside the projects jail." : "The tool was blocked by you.");
@@ -447,6 +449,7 @@ export default function HomePage() {
     setFsSummary("");
     setFsPendingTool(null);
     fsPendingRef.current = null;
+    fsApprovalTokenRef.current = null;
     pushFsFeed("agent", "Root Agent starting", "Team protocol: docs/original_request.md + AGENTS.md rules.");
     setMessages((current) => [...current, { id: createId("user"), role: "user", content: `🛠️ Filesystem agent: ${trimmed}`, createdAt: Date.now() }]);
 
@@ -463,6 +466,13 @@ export default function HomePage() {
         const payload = (await response.json().catch(() => null)) as { error?: string; detail?: string } | null;
         throw new Error(payload?.error ?? payload?.detail ?? "The filesystem agent service rejected the run.");
       }
+      
+      // Capture the approval token from the response header
+      const approvalToken = response.headers.get("X-Approval-Token");
+      if (approvalToken) {
+        fsApprovalTokenRef.current = approvalToken;
+      }
+      
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -490,7 +500,7 @@ export default function HomePage() {
             const tool = String(event.tool ?? "");
             pushFsFeed("tool", `Tool: ${tool}`, JSON.stringify(event.arguments ?? {}).slice(0, 400));
           } else if (type === "fs_consent_required") {
-            const pending = { runId: String(event.run_id ?? ""), tool: String(event.tool ?? ""), arguments: (event.arguments as Record<string, unknown>) ?? {} };
+            const pending = { runId: String(event.run_id ?? ""), approvalToken: approvalToken ?? "", tool: String(event.tool ?? ""), arguments: (event.arguments as Record<string, unknown>) ?? {} };
             fsPendingRef.current = pending;
             setFsPendingTool(pending);
             pushFsFeed("consent", `⚠️ Permission requested: ${pending.tool}`);
@@ -533,6 +543,7 @@ export default function HomePage() {
     } finally {
       fsAbortRef.current = null;
       fsPendingRef.current = null;
+      fsApprovalTokenRef.current = null;
       setFsPendingTool(null);
       setFsRunning(false);
     }

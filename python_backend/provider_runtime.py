@@ -10,8 +10,8 @@ from typing import Any
 
 import httpx
 
-from .config import OLLAMA_TIMEOUT_SECONDS, SCRIPT_TIMEOUT_SECONDS, ALLOW_CUSTOM_PROVIDERS
-from .provider_models import ProviderProfile, join_endpoint
+from .config import ALLOWED_CREDENTIAL_ENV_VARS, OLLAMA_TIMEOUT_SECONDS, SCRIPT_TIMEOUT_SECONDS
+from .provider_models import ProviderProfile, join_endpoint, validate_credential_transport_security
 from .provider_probe import ProviderProbe
 from .provider_store import ProviderStore
 
@@ -118,8 +118,17 @@ class ProviderRuntime:
     @staticmethod
     def _headers(profile: ProviderProfile) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        # Security: Only attach credentials for builtin providers or when custom providers are explicitly enabled
-        if profile.auth_env_var and (profile.builtin or ALLOW_CUSTOM_PROVIDERS):
+        if profile.auth_env_var:
+            # Security: Validate that the environment variable is in the approved allowlist.
+            # This check is defense-in-depth; ProviderProfile validation should have already
+            # rejected unauthorized variables, but we verify again at runtime.
+            if profile.auth_env_var not in ALLOWED_CREDENTIAL_ENV_VARS:
+                raise ProviderRuntimeError(
+                    f"Environment variable '{profile.auth_env_var}' is not in the approved credential allowlist."
+                )
+            # Security: Enforce HTTPS when credentials are being transmitted
+            validate_credential_transport_security(profile.base_url, profile.auth_env_var)
+            
             token = os.getenv(profile.auth_env_var, "")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
@@ -246,13 +255,22 @@ class ProviderRuntime:
         if not profile.script.strip():
             raise ProviderRuntimeError("Custom provider has no adapter script.")
 
-        # Security: Only pass credentials when custom providers are explicitly enabled
+        # Security: Validate credential variable and transport security before passing to script
+        api_key = ""
+        if profile.auth_env_var:
+            if profile.auth_env_var not in ALLOWED_CREDENTIAL_ENV_VARS:
+                raise ProviderRuntimeError(
+                    f"Environment variable '{profile.auth_env_var}' is not in the approved credential allowlist."
+                )
+            validate_credential_transport_security(profile.base_url, profile.auth_env_var)
+            api_key = os.getenv(profile.auth_env_var, "")
+        
         input_payload = {
             "model": model,
             "messages": messages,
             "tools": tools or [],
             "base_url": profile.base_url,
-            "api_key": os.getenv(profile.auth_env_var, "") if (profile.auth_env_var and ALLOW_CUSTOM_PROVIDERS) else "",
+            "api_key": api_key,
         }
         hosts = list(profile.allowed_hosts)
         if profile.base_url:

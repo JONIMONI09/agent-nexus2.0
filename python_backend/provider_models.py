@@ -6,6 +6,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator
 
+from .config import ALLOWED_CREDENTIAL_ENV_VARS
+
 
 ProviderKind = Literal["ollama", "openai_compatible", "custom_script"]
 
@@ -42,6 +44,14 @@ class ProviderProfile(BaseModel):
         value = value.strip().upper()
         if value and not _ENV_RE.fullmatch(value):
             raise ValueError("Credential reference must be a valid environment variable name.")
+        # Security: Only allow explicitly approved credential variable names to prevent
+        # credential exfiltration attacks where arbitrary environment variables could be
+        # probed and sent to attacker-controlled endpoints.
+        if value and value not in ALLOWED_CREDENTIAL_ENV_VARS:
+            raise ValueError(
+                f"Environment variable '{value}' is not in the approved credential allowlist. "
+                f"Permitted variables: {', '.join(sorted(ALLOWED_CREDENTIAL_ENV_VARS))}"
+            )
         return value
 
     @field_validator("allowed_hosts")
@@ -123,6 +133,35 @@ def normalize_base_url(value: str, allow_empty: bool = False) -> str:
         raise ValueError("Provider URLs must not contain embedded credentials.")
     path = parsed.path.rstrip("/")
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def validate_credential_transport_security(base_url: str, auth_env_var: str) -> None:
+    """
+    Security: Enforce HTTPS when credentials are being transmitted to prevent
+    credential exposure over cleartext HTTP connections.
+    
+    Raises ValueError if credentials would be sent over HTTP to a non-localhost destination.
+    """
+    if not auth_env_var:
+        # No credentials, no transport security requirement
+        return
+    
+    normalized = normalize_base_url(base_url, allow_empty=True)
+    if not normalized:
+        return
+    
+    parsed = urlsplit(normalized)
+    hostname = parsed.hostname or ""
+    
+    # Allow HTTP only for localhost/loopback addresses
+    is_localhost = hostname in {"localhost", "127.0.0.1", "::1", "[::1]"} or hostname.startswith("127.")
+    
+    if parsed.scheme == "http" and not is_localhost:
+        raise ValueError(
+            "Credentials cannot be sent over cleartext HTTP to non-localhost destinations. "
+            "Use HTTPS to protect credentials in transit, or remove the credential reference "
+            "for local/unauthenticated endpoints."
+        )
 
 
 def join_endpoint(base_url: str, path: str) -> str:
