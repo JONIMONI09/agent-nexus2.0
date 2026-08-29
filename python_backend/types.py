@@ -73,6 +73,13 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 
+class FsApprovalRequest(BaseModel):
+    """Approval request for filesystem operations requiring both run_id and approval_token."""
+    run_id: str = Field(min_length=1, max_length=100, description="The run identifier emitted in the SSE stream")
+    approval_token: str = Field(min_length=1, max_length=100, description="Secret token returned in X-Approval-Token header")
+    approved: bool
+
+
 class LearningSettingsRequest(BaseModel):
     enabled: bool
 

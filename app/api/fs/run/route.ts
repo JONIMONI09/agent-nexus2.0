@@ -14,12 +14,21 @@ export async function POST(request: NextRequest) {
       body,
       cache: "no-store",
     });
+    
+    // Pass through the approval token header from the backend
+    const headers: Record<string, string> = {
+      "Cache-Control": "no-cache, no-transform",
+      "Content-Type": response.headers.get("content-type") ?? "text/event-stream",
+    };
+    
+    const approvalToken = response.headers.get("X-Approval-Token");
+    if (approvalToken) {
+      headers["X-Approval-Token"] = approvalToken;
+    }
+    
     return new Response(response.body, {
       status: response.status,
-      headers: {
-        "Cache-Control": "no-cache, no-transform",
-        "Content-Type": response.headers.get("content-type") ?? "text/event-stream",
-      },
+      headers,
     });
   } catch (error) {
     return Response.json(
