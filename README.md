@@ -133,26 +133,23 @@ All variables are optional; sensible defaults are used.
 | `MAX_TOOL_ROUNDS`            | `3`                        | Max tool-call rounds per agent (loop guard) |
 | `FALLBACK_MODEL`             | `qwen2.5:3b`               | Default fallback model id                   |
 | `PROVIDER_PROBE_TIMEOUT_SECONDS` | `5`                    | Timeout for provider capability probes      |
-| `GITHUB_ALLOWED_REPOSITORIES` | *(empty)*                 | Comma-separated list of authorized repositories (e.g., `myorg/repo1,myorg/repo2`). **Required** for GitHub integration. |
+| `API_KEY`                    | _(empty)_                  | API key for provider management (see Security) |
 
 **Provider API keys** (optional, e.g. for an external OpenAI-compatible endpoint): set them in the
 host environment and reference the variable **name** in the provider form. The backend resolves the
 value at request time; it never ships the value to the browser and never logs it.
 
-### GitHub Integration Security
+### Security: API Key Authentication
 
-The GitHub integration requires **two** environment variables for secure operation:
+When deploying in network-accessible environments, set `API_KEY` to protect provider management endpoints:
 
-1. **`GITHUB_TOKEN`** — Your GitHub personal access token or fine-grained token with appropriate permissions.
-2. **`GITHUB_ALLOWED_REPOSITORIES`** — A comma-separated allowlist of repositories (format: `owner/repo`) that this application is authorized to access.
-
-**Example:**
 ```bash
-export GITHUB_TOKEN="ghp_your_token_here"
-export GITHUB_ALLOWED_REPOSITORIES="myorg/project1,myorg/project2"
+# Generate a strong API key
+export API_KEY=$(openssl rand -base64 32)
 ```
 
-**Security rationale:** Without the allowlist, any unauthenticated caller could abuse the server's GitHub token to perform operations on arbitrary repositories. The allowlist ensures that only explicitly authorized repositories can be accessed, preventing confused deputy attacks.
+When `API_KEY` is set, `POST /providers` and `DELETE /providers/{id}` require the `X-API-Key` header.
+The Next.js proxy automatically forwards the key from its environment. See [SECURITY.md](SECURITY.md) for details.
 
 ---
 

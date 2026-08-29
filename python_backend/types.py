@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .config import ALLOWED_CREDENTIAL_ENV_VARS
 
 
 class HistoryMessage(BaseModel):
@@ -48,6 +50,22 @@ class GitHubPullRequestRequest(BaseModel):
 class ProviderDetectionRequest(BaseModel):
     base_url: str = Field(min_length=1, max_length=2000)
     auth_env_var: str = Field(default="", max_length=128)
+    
+    @field_validator("auth_env_var")
+    @classmethod
+    def validate_auth_env_var(cls, value: str) -> str:
+        """
+        Security: Validate that the environment variable is in the approved allowlist
+        to prevent credential exfiltration attacks where arbitrary environment variables
+        could be probed and sent to attacker-controlled endpoints.
+        """
+        value = value.strip().upper()
+        if value and value not in ALLOWED_CREDENTIAL_ENV_VARS:
+            raise ValueError(
+                f"Environment variable '{value}' is not in the approved credential allowlist. "
+                f"Permitted variables: {', '.join(sorted(ALLOWED_CREDENTIAL_ENV_VARS))}"
+            )
+        return value
 
 
 class ProviderUpsertRequest(BaseModel):
@@ -62,6 +80,21 @@ class ProviderUpsertRequest(BaseModel):
     default_model: str = Field(default="", max_length=160)
     script: str = Field(default="", max_length=60000)
     allowed_hosts: list[str] = Field(default_factory=list, max_length=30)
+    
+    @field_validator("auth_env_var")
+    @classmethod
+    def validate_auth_env_var(cls, value: str) -> str:
+        """
+        Security: Validate that the environment variable is in the approved allowlist
+        to prevent credential exfiltration attacks.
+        """
+        value = value.strip().upper()
+        if value and value not in ALLOWED_CREDENTIAL_ENV_VARS:
+            raise ValueError(
+                f"Environment variable '{value}' is not in the approved credential allowlist. "
+                f"Permitted variables: {', '.join(sorted(ALLOWED_CREDENTIAL_ENV_VARS))}"
+            )
+        return value
 
 
 class ProviderModelsRequest(BaseModel):
@@ -70,6 +103,13 @@ class ProviderModelsRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     call_id: str = Field(min_length=1, max_length=100)
+    approved: bool
+
+
+class FsApprovalRequest(BaseModel):
+    """Approval request for filesystem operations requiring both run_id and approval_token."""
+    run_id: str = Field(min_length=1, max_length=100, description="The run identifier emitted in the SSE stream")
+    approval_token: str = Field(min_length=1, max_length=100, description="Secret token returned in X-Approval-Token header")
     approved: bool
 
 

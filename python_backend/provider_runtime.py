@@ -10,8 +10,8 @@ from typing import Any
 
 import httpx
 
-from .config import OLLAMA_TIMEOUT_SECONDS, SCRIPT_TIMEOUT_SECONDS
-from .provider_models import ProviderProfile, join_endpoint
+from .config import ALLOWED_CREDENTIAL_ENV_VARS, OLLAMA_TIMEOUT_SECONDS, SCRIPT_TIMEOUT_SECONDS
+from .provider_models import ProviderProfile, join_endpoint, validate_credential_transport_security
 from .provider_probe import ProviderProbe
 from .provider_store import ProviderStore
 
@@ -38,6 +38,13 @@ class ProviderRuntime:
 
     async def list_models(self, provider_id: str) -> list[dict[str, Any]]:
         profile = self._profile(provider_id)
+        # Security check: prevent use of custom providers when disabled
+        if not profile.builtin and not ALLOW_CUSTOM_PROVIDERS:
+            raise ProviderRuntimeError(
+                f"Provider '{provider_id}' is a custom provider. "
+                "Custom providers are disabled for security. Set ALLOW_CUSTOM_PROVIDERS=true to enable "
+                "(security risk: allows arbitrary code execution and credential access)."
+            )
         if profile.kind == "custom_script":
             return []
         headers = self._headers(profile)
@@ -79,6 +86,13 @@ class ProviderRuntime:
         think: bool = True,
     ) -> AsyncIterator[dict[str, Any]]:
         profile = self._profile(provider_id)
+        # Security check: prevent use of custom providers when disabled
+        if not profile.builtin and not ALLOW_CUSTOM_PROVIDERS:
+            raise ProviderRuntimeError(
+                f"Provider '{provider_id}' is a custom provider. "
+                "Custom providers are disabled for security. Set ALLOW_CUSTOM_PROVIDERS=true to enable "
+                "(security risk: allows arbitrary code execution and credential access)."
+            )
         if profile.kind == "ollama":
             async for event in self._ollama_stream(profile, model, messages, tools, think):
                 yield event
@@ -105,6 +119,16 @@ class ProviderRuntime:
     def _headers(profile: ProviderProfile) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if profile.auth_env_var:
+            # Security: Validate that the environment variable is in the approved allowlist.
+            # This check is defense-in-depth; ProviderProfile validation should have already
+            # rejected unauthorized variables, but we verify again at runtime.
+            if profile.auth_env_var not in ALLOWED_CREDENTIAL_ENV_VARS:
+                raise ProviderRuntimeError(
+                    f"Environment variable '{profile.auth_env_var}' is not in the approved credential allowlist."
+                )
+            # Security: Enforce HTTPS when credentials are being transmitted
+            validate_credential_transport_security(profile.base_url, profile.auth_env_var)
+            
             token = os.getenv(profile.auth_env_var, "")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
@@ -219,18 +243,34 @@ class ProviderRuntime:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
+        # Security: Custom scripts should only run when explicitly enabled
+        if not ALLOW_CUSTOM_PROVIDERS:
+            raise ProviderRuntimeError(
+                "Custom provider scripts are disabled for security. Set ALLOW_CUSTOM_PROVIDERS=true to enable "
+                "(security risk: allows arbitrary code execution and credential access)."
+            )
         executable = shutil.which("deno")
         if not executable:
             raise ProviderRuntimeError("Deno is required for custom provider scripts but was not found on PATH.")
         if not profile.script.strip():
             raise ProviderRuntimeError("Custom provider has no adapter script.")
 
+        # Security: Validate credential variable and transport security before passing to script
+        api_key = ""
+        if profile.auth_env_var:
+            if profile.auth_env_var not in ALLOWED_CREDENTIAL_ENV_VARS:
+                raise ProviderRuntimeError(
+                    f"Environment variable '{profile.auth_env_var}' is not in the approved credential allowlist."
+                )
+            validate_credential_transport_security(profile.base_url, profile.auth_env_var)
+            api_key = os.getenv(profile.auth_env_var, "")
+        
         input_payload = {
             "model": model,
             "messages": messages,
             "tools": tools or [],
             "base_url": profile.base_url,
-            "api_key": os.getenv(profile.auth_env_var, "") if profile.auth_env_var else "",
+            "api_key": api_key,
         }
         hosts = list(profile.allowed_hosts)
         if profile.base_url:
