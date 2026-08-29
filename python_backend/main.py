@@ -29,7 +29,7 @@ from .skills.web_search import WebSearchSkill
 from .tools import ConsentBroker, ToolRegistry
 from .translate import translation_routes, translate_message_best_effort
 from .github_service import GitHubService, GitHubServiceError
-from .types import ApprovalRequest, FsRunRequest, FsSettingsRequest, GitHubBranchRequest, GitHubPullRequestRequest, GitHubRepositoryRequest, HistoryMessage, LearningSettingsRequest, LearningUpdateRequest, OrchestrateRequest, ProviderDetectionRequest, ProviderModelsRequest, ProviderUpsertRequest
+from .types import ApprovalRequest, FsApprovalRequest, FsRunRequest, FsSettingsRequest, GitHubBranchRequest, GitHubPullRequestRequest, GitHubRepositoryRequest, HistoryMessage, LearningSettingsRequest, LearningUpdateRequest, OrchestrateRequest, ProviderDetectionRequest, ProviderModelsRequest, ProviderUpsertRequest
 
 app = FastAPI(title="Local Agent Studio API", version="1.0.0")
 app.add_middleware(
@@ -821,22 +821,24 @@ async def fs_settings_post(request: FsSettingsRequest) -> dict[str, Any]:
 async def fs_run(request: FsRunRequest) -> StreamingResponse:
     """Run the FS agent team; every real tool call pauses for browser consent."""
     run_id = str(uuid.uuid4())
+    approval_token = str(uuid.uuid4())  # Secret token for authorization
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
     async def emit(event_type: str, **payload: Any) -> None:
         await queue.put(event_payload(event_type, **payload))
 
     async def needs_consent(tool: str, arguments: dict[str, Any]) -> bool:
-        fs_pending[run_id] = {"tool": tool, "arguments": arguments, "event": asyncio.Event(), "approved": None}
+        # Store pending operation keyed by approval_token (secret), not run_id (public)
+        fs_pending[approval_token] = {"run_id": run_id, "tool": tool, "arguments": arguments, "event": asyncio.Event(), "approved": None}
         await emit("fs_consent_required", run_id=run_id, tool=tool, arguments=arguments)
-        pending = fs_pending[run_id]
+        pending = fs_pending[approval_token]
         try:
             await asyncio.wait_for(pending["event"].wait(), timeout=APPROVAL_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             pending["approved"] = False
         decision = bool(pending["approved"])
         await emit("fs_consent_result", run_id=run_id, tool=tool, approved=decision)
-        fs_pending.pop(run_id, None)
+        fs_pending.pop(approval_token, None)
         return decision
 
     async def worker() -> None:
@@ -847,7 +849,8 @@ async def fs_run(request: FsRunRequest) -> StreamingResponse:
         except Exception as exc:  # noqa: BLE001 - surfaced to the browser
             await emit("fs_error", message=str(exc), run_id=run_id)
         finally:
-            fs_pending.pop(run_id, None)
+            # Clean up any pending operations for this approval_token
+            fs_pending.pop(approval_token, None)
             await queue.put(None)
 
     task = asyncio.create_task(worker())
@@ -862,21 +865,48 @@ async def fs_run(request: FsRunRequest) -> StreamingResponse:
         finally:
             if not task.done():
                 task.cancel()
-            fs_pending.pop(run_id, None)
+            fs_pending.pop(approval_token, None)
 
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache, no-transform", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Approval-Token": approval_token,  # Return secret token for authorization
+        },
     )
 
 
 @app.post("/fs/approve")
-async def fs_approve(request: ApprovalRequest) -> dict[str, Any]:
-    """Resolve a pending fs_consent_required for the run that owns call_id=run token."""
-    pending = fs_pending.get(request.call_id)
+async def fs_approve(request: FsApprovalRequest) -> dict[str, Any]:
+    """Resolve a pending fs_consent_required; requires both run_id and secret approval_token."""
+    # Find pending operation by approval_token (not run_id) to prevent unauthorized approval
+    pending = None
+    approval_token_key = None
+    
+    # Search for the pending operation that matches both run_id and approval_token
+    for token, pending_data in fs_pending.items():
+        if pending_data.get("run_id") == request.run_id:
+            # Found a pending operation with matching run_id, now verify the approval_token
+            if token == request.approval_token:
+                pending = pending_data
+                approval_token_key = token
+                break
+            else:
+                # run_id matches but approval_token doesn't - unauthorized attempt
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid approval token for this run. Authorization required."
+                )
+    
     if pending is None:
-        raise HTTPException(status_code=404, detail="No pending FS tool request for this run.")
+        raise HTTPException(
+            status_code=404,
+            detail="No pending FS tool request for this run, or the request has expired."
+        )
+    
     pending["approved"] = request.approved
     pending["event"].set()
     return {"ok": True}
